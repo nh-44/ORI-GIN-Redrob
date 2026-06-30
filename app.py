@@ -4,6 +4,7 @@ import os
 import numpy as np
 from src.parser import load_and_preprocess_data
 from src.embedder import RecruitmentEmbedder
+from src.explainer import generate_aura_insight
 
 # Configure page layout
 st.set_page_config(page_title="ORIGIN AURA", page_icon="🔮", layout="wide")
@@ -254,30 +255,7 @@ def format_score_block(percentage):
         
     return f'<div class="score-block" style="background-color: {bg_color}; color: {text_color};">{pct}%</div>'
 
-# 🧠 INTERACTION ENGINE: Generates a 1-sentence analytical insight summary dynamically
-def generate_aura_insight(row, jd_string, ai_score, exp_score, target_y):
-    matched_keywords = []
-    jd_words = [w.strip(",.()").lower() for w in jd_string.split() if len(w) > 2]
-    cand_text = (str(row['skills']) + " " + str(row['experience_summary'])).lower()
-    
-    for word in jd_words:
-        if word in cand_text and word not in matched_keywords and word not in ['for', 'and', 'with', 'the', 'looking', 'experienced']:
-            matched_keywords.append(word)
-            if len(matched_keywords) >= 3:
-                break
-                
-    keywords_str = ", ".join(matched_keywords[:2]).upper()
-    
-    if ai_score >= 80 and abs(row['years_of_experience'] - target_y) <= 2:
-        return f"Elite alignment: Exceptional structural grasp of {keywords_str} with optimal seniority timeline placement."
-    elif ai_score >= 70:
-        return f"Strong conceptual match with deep technical exposure highlighting {keywords_str} proficiencies."
-    elif row['years_of_experience'] >= target_y and ai_score >= 50:
-        return f"Ranked primarily on solid seniority foundation; technical exposure to {keywords_str if keywords_str else 'core role metrics'} acts as a secondary buffer."
-    elif ai_score < 45:
-        return "Critical contextual divergence; missing core technology proficiencies required for deployment."
-    else:
-        return f"Moderate match; displays baseline exposure to {keywords_str if keywords_str else 'role stack'} but requires alignment fine-tuning."
+# Insights generated using shared explainer utility
 
 st.markdown("<div class='step-header'>👥 Step 3: Compute Leaderboard Matrices</div>", unsafe_allow_html=True)
 if st.button("🚀 Execute AURA Synthesis Matrix", type="primary"):
@@ -288,7 +266,7 @@ if st.button("🚀 Execute AURA Synthesis Matrix", type="primary"):
         df['semantic_profile'] = df['skills'].fillna('') + " " + df['experience_summary'].fillna('')
         data_source_valid = True
     else:
-        csv_path = os.path.join("data", "raw", "expanded_candidates.csv")
+        csv_path = os.path.join("data", "expanded_candidates.csv")
         if os.path.exists(csv_path):
             df = load_and_preprocess_data(csv_path)
             df['years_of_experience'] = pd.to_numeric(df['years_of_experience']).fillna(0)
@@ -315,6 +293,8 @@ if st.button("🚀 Execute AURA Synthesis Matrix", type="primary"):
             experience_scores = np.clip(1.0 - (exp_diff / 10.0), 0.1, 1.0).to_numpy()
             
             final_scores = (semantic_scores * semantic_weight) + (experience_scores * exp_weight)
+            df['semantic_score'] = semantic_scores
+            df['experience_score'] = experience_scores
             
             # Formulating raw percentages to pass down to insight processor safely
             ai_pcts = (semantic_scores * 100).round(0)
@@ -354,10 +334,31 @@ if st.button("🚀 Execute AURA Synthesis Matrix", type="primary"):
             csv_download_df.columns = ['Rank', 'Candidate Name', 'Years of Experience', 'Total AURA Score', 'AURA Insight']
             csv_buffer = csv_download_df.to_csv(index=False).encode('utf-8')
             
-            st.download_button(
-                label="📥 Export Ranked Candidate Shortlist (CSV)",
-                data=csv_buffer,
-                file_name="aura_ranked_candidates.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
+            # Prepare Excel payload
+            import io
+            excel_buffer = io.BytesIO()
+            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                excel_download_df = results[['Rank', 'name', 'years_of_experience', 'semantic_score', 'experience_score', 'OVERALL SCORE', 'AURA Insight']].copy()
+                excel_download_df['semantic_score'] = (excel_download_df['semantic_score'] * 100).round(1)
+                excel_download_df['experience_score'] = (excel_download_df['experience_score'] * 100).round(1)
+                excel_download_df.columns = ['Rank', 'Candidate Name', 'Years of Experience', 'AI Semantic Match (%)', 'Experience Match (%)', 'Total AURA Score (%)', 'AURA Insight']
+                excel_download_df.to_excel(writer, index=False, sheet_name='Ranked Candidates')
+            excel_data = excel_buffer.getvalue()
+            
+            col_csv, col_excel = st.columns(2)
+            with col_csv:
+                st.download_button(
+                    label="📥 Export Ranked Candidate Shortlist (CSV)",
+                    data=csv_buffer,
+                    file_name="aura_ranked_candidates.csv",
+                    mime="text/csv",
+                    use_container_width=True
+                )
+            with col_excel:
+                st.download_button(
+                    label="📥 Export Ranked Candidate Shortlist (Excel)",
+                    data=excel_data,
+                    file_name="aura_ranked_candidates.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True
+                )
